@@ -1,0 +1,111 @@
+import type { Action } from "svelte/action";
+import { openContextMenu, openContextMenuAtRect, type ContextMenuAnchorRect, type MenuItemDef } from "../../stores/contextMenu";
+
+export type ContextMenuItemsGetter = () => MenuItemDef[];
+
+export type ContextMenuBinding =
+  | ContextMenuItemsGetter
+  | {
+      items: ContextMenuItemsGetter;
+      /** Runs after preventDefault/stopPropagation; before building items (e.g. sync selection). */
+      beforeOpen?: () => void;
+      /** See ContextMenuOptions.paginate — false draws short flyouts in full. */
+      paginate?: boolean;
+    };
+
+type ContextMenuModifiers = Pick<MouseEvent, "ctrlKey" | "shiftKey" | "altKey" | "metaKey">;
+
+export function hasBrowserContextMenuModifier(ev: ContextMenuModifiers): boolean {
+  return ev.ctrlKey || ev.shiftKey || ev.altKey || ev.metaKey;
+}
+
+export function preventUnmodifiedBrowserContextMenu(ev: MouseEvent): void {
+  if (!hasBrowserContextMenuModifier(ev)) {
+    ev.preventDefault();
+  }
+}
+
+function normalize(binding: ContextMenuBinding): {
+  getter: ContextMenuItemsGetter;
+  beforeOpen?: () => void;
+  paginate?: boolean;
+} {
+  if (typeof binding === "function") {
+    return { getter: binding };
+  }
+  return { getter: binding.items, beforeOpen: binding.beforeOpen, paginate: binding.paginate };
+}
+
+function isKeyboardContextMenuEvent(ev: KeyboardEvent): boolean {
+  return (ev.shiftKey && ev.key === "F10") || ev.key === "ContextMenu";
+}
+
+function rectFromElement(el: HTMLElement): ContextMenuAnchorRect {
+  const rect = el.getBoundingClientRect();
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function openMenu(
+  getter: ContextMenuItemsGetter,
+  beforeOpen: (() => void) | undefined,
+  open: (items: MenuItemDef[]) => void,
+): void {
+  beforeOpen?.();
+  const items = getter?.() ?? [];
+  if (!items.length) {
+    return;
+  }
+  open(items);
+}
+
+/** Right-click or the keyboard menu key: optionally run beforeOpen, then open the global context menu from getter. */
+export const contextMenu: Action<HTMLElement, ContextMenuBinding> = (node, binding) => {
+  let getter: ContextMenuItemsGetter;
+  let beforeOpen: (() => void) | undefined;
+  let paginate: boolean | undefined;
+  ({ getter, beforeOpen, paginate } = normalize(binding));
+  const keyboardHost = node.closest("[data-dnd-cell]");
+  const listenerNodes = keyboardHost instanceof HTMLElement && keyboardHost !== node ? [node, keyboardHost] : [node];
+
+  const onCtx = (ev: MouseEvent): void => {
+    if (hasBrowserContextMenuModifier(ev)) {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    openMenu(getter, beforeOpen, (items) => openContextMenu(ev.clientX, ev.clientY, items, { paginate }));
+  };
+
+  const onKeyDown = (ev: KeyboardEvent): void => {
+    if (!isKeyboardContextMenuEvent(ev)) {
+      return;
+    }
+    const target = ev.target instanceof HTMLElement ? ev.target : node;
+    ev.preventDefault();
+    ev.stopPropagation();
+    openMenu(getter, beforeOpen, (items) => openContextMenuAtRect(rectFromElement(target), items, { paginate }));
+  };
+
+  listenerNodes.forEach((listenerNode) => {
+    listenerNode.addEventListener("contextmenu", onCtx);
+    listenerNode.addEventListener("keydown", onKeyDown);
+  });
+  return {
+    update(next: ContextMenuBinding) {
+      ({ getter, beforeOpen, paginate } = normalize(next));
+    },
+    destroy() {
+      listenerNodes.forEach((listenerNode) => {
+        listenerNode.removeEventListener("contextmenu", onCtx);
+        listenerNode.removeEventListener("keydown", onKeyDown);
+      });
+    },
+  };
+};

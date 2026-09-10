@@ -1,0 +1,220 @@
+import type { SearchResultRow } from "../../components/SearchOverlay.svelte";
+import type { AccountRowProjection, AccountSearchProjection, GameStatMetricDTO } from "../../components/PlatformAccountAdapter";
+import type { TagFilterMode } from "../accountTagsContext";
+import type { PlatformSortKind } from "../../stores/platformListSort";
+import { censorName } from "../../stores/streamerMode";
+import { accountAvatarSrc } from "../accountAvatarSrc";
+import { shouldBumpEpoch } from "./epochManager";
+import type { EpochCheckRow } from "./types";
+
+export type AccountImagePickState = {
+  open: boolean;
+  accountId: string;
+  displayName: string;
+  manual: boolean;
+};
+
+export type SearchHayCache = Map<string, { v: number; text: string }>;
+
+export type GameStatsByAccount = Record<
+  string,
+  Record<string, Record<string, GameStatMetricDTO>>
+>;
+
+export function mergeGameStatsByAccount(
+  current: GameStatsByAccount,
+  patch: GameStatsByAccount,
+): GameStatsByAccount {
+  return { ...current, ...patch };
+}
+
+export function buildAccountMap<T>(
+  accounts: T[],
+  rows: AccountRowProjection<T>,
+): Map<string, T> {
+  return new Map(accounts.map((account) => [rows.id(account), account] as const));
+}
+
+export function displayIdsForTagFilter<T>(
+  accountIds: string[],
+  accountMap: Map<string, T>,
+  rows: AccountRowProjection<T>,
+  tagFilterMode: TagFilterMode,
+): string[] {
+  if (tagFilterMode.kind === "all") return accountIds;
+  if (tagFilterMode.kind === "untagged") {
+    return accountIds.filter((id) => {
+      const account = accountMap.get(id);
+      return account ? (rows.tags(account) ?? []).length === 0 : true;
+    });
+  }
+
+  if (tagFilterMode.kind === "notTag") {
+    // An account we cannot resolve is kept: "not tagged X" is the inclusive
+    // reading, and dropping unknown rows would silently shrink the list.
+    return accountIds.filter((id) => {
+      const account = accountMap.get(id);
+      return account ? !(rows.tags(account) ?? []).some((tag) => tag.id === tagFilterMode.id) : true;
+    });
+  }
+
+  return accountIds.filter((id) => {
+    const account = accountMap.get(id);
+    return account ? (rows.tags(account) ?? []).some((tag) => tag.id === tagFilterMode.id) : false;
+  });
+}
+
+export function hasActiveAccountTags<T>(accounts: T[], rows: AccountRowProjection<T>): boolean {
+  return accounts.some((account) => (rows.tags(account) ?? []).length > 0);
+}
+
+export function createImagePickState<T>(
+  rowId: string,
+  account: T | undefined,
+  rows: AccountRowProjection<T>,
+): AccountImagePickState {
+  return {
+    open: true,
+    accountId: rowId,
+    displayName: (account ? rows.name(account) : rowId).trim(),
+    manual: account ? rows.manualProfileImage(account) : false,
+  };
+}
+
+export function sortAccountIds<T>(
+  accountIds: string[],
+  accountById: (id: string) => T | undefined,
+  rows: AccountRowProjection<T>,
+  kind: PlatformSortKind,
+): string[] | null {
+  const ids = [...accountIds];
+  const displayKey = (uid: string) => {
+    const account = accountById(uid);
+    return (account ? rows.name(account) : uid).trim().toLowerCase();
+  };
+  const lastUsedMs = (uid: string) => {
+    const account = accountById(uid);
+    if (!account) return 0;
+    const value = Date.parse((rows.lastUsed(account) ?? "").trim());
+    return Number.isNaN(value) ? 0 : value;
+  };
+  const accountNameKey = (uid: string) => {
+    const account = accountById(uid);
+    return account ? rows.accountLogin(account).trim().toLowerCase() : uid.toLowerCase();
+  };
+  const cmpAlpha = (x: string, y: string) => displayKey(x).localeCompare(displayKey(y));
+  const cmpUser = (x: string, y: string) => accountNameKey(x).localeCompare(accountNameKey(y));
+
+  switch (kind) {
+    case "alpha_asc": ids.sort(cmpAlpha); break;
+    case "alpha_desc": ids.sort((x, y) => -cmpAlpha(x, y)); break;
+    case "steam_user_asc": ids.sort(cmpUser); break;
+    case "steam_user_desc": ids.sort((x, y) => -cmpUser(x, y)); break;
+    case "lastused_new_old":
+    case "date_new_old":
+      ids.sort((x, y) => lastUsedMs(y) - lastUsedMs(x) || cmpAlpha(x, y));
+      break;
+    case "lastused_old_new":
+    case "date_old_new":
+      ids.sort((x, y) => lastUsedMs(x) - lastUsedMs(y) || cmpAlpha(x, y));
+      break;
+    default:
+      return null;
+  }
+
+  return ids;
+}
+
+export function applyAccountPatch<T>(
+  accounts: T[],
+  rowVersions: Record<string, number>,
+  avatarEpoch: Record<string, number>,
+  rows: AccountRowProjection<T>,
+  targetId: string,
+  nextAccount: T,
+): {
+  accounts: T[];
+  rowVersions: Record<string, number>;
+  avatarEpoch: Record<string, number>;
+  changed: boolean;
+} {
+  const idx = accounts.findIndex((account) => rows.id(account) === targetId);
+  if (idx < 0) return { accounts, rowVersions, avatarEpoch, changed: false };
+
+  const prev = accounts[idx];
+  if (rows.visualKey(prev) === rows.visualKey(nextAccount)) {
+    return { accounts, rowVersions, avatarEpoch, changed: false };
+  }
+
+  const nextAccounts = [...accounts];
+  nextAccounts[idx] = nextAccount;
+  const nextVersions = { ...rowVersions, [targetId]: (rowVersions[targetId] ?? 0) + 1 };
+  let nextEpoch = avatarEpoch;
+  if (shouldBumpEpoch(prev as unknown as EpochCheckRow, nextAccount as unknown as EpochCheckRow)) {
+    nextEpoch = { ...avatarEpoch, [targetId]: (avatarEpoch[targetId] ?? 0) + 1 };
+  }
+
+  return {
+    accounts: nextAccounts,
+    rowVersions: nextVersions,
+    avatarEpoch: nextEpoch,
+    changed: true,
+  };
+}
+
+export function buildAccountSearchRows<T>(
+  params: {
+    accounts: T[];
+    rows: AccountRowProjection<T> & AccountSearchProjection<T>;
+    query: string;
+    max: number;
+    rowVersions: Record<string, number>;
+    avatarEpoch: Record<string, number>;
+    searchHayCache: SearchHayCache;
+    offlineMode: boolean;
+    profileFallback: string;
+    accountBadge: string;
+    platformKey: string;
+    streamer: boolean;
+    avatarSalt: string;
+  },
+): SearchResultRow[] {
+  const trimmed = params.query.trim();
+  const queryWords = trimmed ? trimmed.toLowerCase().split(/\s+/).filter(Boolean) : [];
+  const getHay = (account: T): string => {
+    const id = params.rows.id(account);
+    const version = params.rowVersions[id] ?? 0;
+    const hit = params.searchHayCache.get(id);
+    if (hit && hit.v === version) return hit.text;
+    const text = params.rows.searchHay(account, trimmed).toLowerCase();
+    params.searchHayCache.set(id, { v: version, text });
+    return text;
+  };
+  const matches = (text: string) => queryWords.every((word) => text.includes(word));
+  const accounts = trimmed
+    ? params.accounts.filter((account) => matches(getHay(account))).slice(0, params.max)
+    : params.accounts.slice(0, params.max);
+
+  return accounts.map((account) => {
+    const id = params.rows.id(account);
+    const name = params.rows.name(account);
+    return {
+      key: `a:${id}`,
+      // Falling back to the raw id would put the identifier straight back on screen
+      // in the one place the account list itself is hidden behind an overlay.
+      title: censorName(name, params.streamer) || (params.streamer ? "" : id),
+      badge: params.accountBadge,
+      accountIconUrl: accountAvatarSrc({
+        streamer: params.streamer,
+        salt: params.avatarSalt,
+        platformKey: params.platformKey,
+        accountKey: params.rows.accountLogin(account) || id,
+        imageUrl: params.rows.imageUrl(account),
+        pending: params.rows.imagePending(account),
+        epoch: params.avatarEpoch[id] ?? 0,
+        offline: params.offlineMode,
+        fallback: params.profileFallback,
+      }),
+    };
+  });
+}

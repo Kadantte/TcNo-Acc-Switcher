@@ -1,0 +1,38 @@
+<script lang="ts">
+  import type { Component } from "svelte";
+  import { sanitizeHtml } from "../../lib/sanitizeHtml";
+
+  export let html: string | undefined = undefined;
+  export let component: Component<any> | undefined = undefined;
+  export let componentProps: Record<string, unknown> | undefined = undefined;
+</script>
+
+{#if component}
+  <div class="modal-html modal-text">
+    <svelte:component this={component} {...componentProps ?? {}} />
+  </div>
+{:else if html}
+  <div class="modal-html modal-text">{@html sanitizeHtml(html, "inline")}</div>
+{/if}
+
+<style lang="scss">
+  .modal-text {
+    margin: 0;
+    color: var(--white, #fff);
+    line-height: 1.45;
+  }
+
+  .modal-html :global(p) {
+    margin: 0 0 0.5em;
+  }
+
+  .modal-html :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  /* For a body that reports why the previous attempt failed. */
+  .modal-html :global(.modal-warning) {
+    color: var(--role-error, var(--danger, #ff6b6b));
+    font-weight: 600;
+  }
+</style>

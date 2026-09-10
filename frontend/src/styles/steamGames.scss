@@ -1,0 +1,327 @@
+/* Steam platform page, GAMES tab: the game list and the action bar's account strip. */
+
+/* The list is hidden rather than unmounted while the switcher tab shows, so that
+   coming back does not rebuild thousands of rows. `display: none` keeps it out of
+   layout and paint entirely; the class needs `.main-content`'s specificity to win. */
+.main-content.steamGames--hidden {
+  display: none;
+}
+
+/* Replays on every swap back, not only on first paint: an element under
+   `display: none` runs no animation, and a tab swap that lands in one frame
+   reads as a flicker.
+
+   Opacity only, and only on this view - a reveal on the shared shell would run
+   on page entry too, on top of the page's own transition. */
+.steamGames__view {
+  animation: steamGamesViewReveal var(--dur-fast) var(--ease-out) both;
+}
+
+@keyframes steamGamesViewReveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Only the first chunk's first rows: everything else is below the fold, and
+   `content-visibility: auto` would otherwise start each chunk's animation as it
+   scrolled into view, fading rows in under the cursor. Twenty is one screenful. */
+.steamGames__chunk:first-child .steamGames__row {
+  animation: steamGamesRowReveal var(--dur-normal) var(--ease-out) both;
+}
+
+@for $i from 1 through 20 {
+  .steamGames__chunk:first-child .steamGames__row:nth-child(#{$i}) {
+    animation-delay: #{($i - 1) * 26}ms;
+  }
+}
+
+.steamGames__chunk:first-child .steamGames__row:nth-child(n + 21) {
+  animation: none;
+}
+
+@keyframes steamGamesRowReveal {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Same chain as the account list: host → table → scroller, every level a flex
+   column that may shrink, so the list keeps the only scrollbar on the page. */
+.steamGames__host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Full-width bar above the list. The input and the button read as one control, so
+   the border lives on the wrapper and neither child draws one of its own. */
+.steamGames__search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  margin: 0.25rem 0.5rem 0;
+  background: var(--even-darker-code-background);
+  border-bottom: 2px solid var(--input-number-border);
+
+  &:focus-within {
+    border-bottom-color: var(--accent);
+  }
+}
+
+.steamGames__searchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0.45em 0.6em;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--whiteSecondary);
+  font: inherit;
+
+  &::placeholder {
+    color: var(--modal-placeholder-fg, var(--whiteSecondary));
+    opacity: 0.7;
+  }
+
+  /* The native affordance is a themed grey "x" this app cannot restyle, and Escape
+     already clears the field. */
+  &::-webkit-search-cancel-button {
+    appearance: none;
+  }
+}
+
+.steamGames__searchBtn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.2rem;
+  margin: 0;
+  padding: 0 0.6rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.8;
+
+  &:hover {
+    opacity: 1;
+    background: var(--button-bg-hover, var(--button-bg));
+  }
+}
+
+/* Clips here and not on the host: the search bar is a sibling of this box and must
+   keep its own height rather than be squeezed by the list's overflow. */
+.steamGames__table {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.steamGames {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.steamGames__intro {
+  max-width: 46rem;
+}
+
+.steamGames__list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--steamGames-row-gap);
+
+  /* Row height is fully determined: the 32px icon is the tallest thing in the row and
+     the name never wraps, so this is the exact box, not an approximation. Keeping it
+     as a token lets the block placeholders below stay right when the root font
+     size changes. */
+  --steamGames-row-gap: 2px;
+  --steamGames-row-height: calc(32px + 0.6rem + 2px);
+}
+
+/* Blocks of rows the renderer can skip wholesale. An off-screen block costs one box
+   instead of a box per row, which is what keeps a forced style recalc or layout — a
+   context menu opening is enough to force both — off the whole library. */
+.steamGames__chunk {
+  display: flex;
+  flex-direction: column;
+  gap: var(--steamGames-row-gap);
+  content-visibility: auto;
+  contain-intrinsic-size: auto
+    calc(
+      var(--steamGames-chunk-rows) *
+        (var(--steamGames-row-height) + var(--steamGames-row-gap)) - var(--steamGames-row-gap)
+    );
+}
+
+.steamGames__rowBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  text-align: start;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+
+  &:hover {
+    background: var(--button-bg-hover, var(--button-bg));
+  }
+
+  &[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--button-bg);
+  }
+}
+
+.steamGames__icon {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  /* Steam's client icon is already square, so cover is a no-op for it. It exists
+     for the fallback: apps with no cached icon fall back to 460x215 header art,
+     which contain would letterbox into a 32x15 strip. */
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.steamGames__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamGames__owners {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+
+.steamGames__ownerAvatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.steamGames__ownerOverflow,
+.steamGames__ownerUnknown {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 0.25rem;
+  border-radius: 12px;
+  /* flex, not inline-flex: as an inline-level box it sat on the row's baseline,
+     and the inherited line-height made its line box taller than the 24px badge,
+     which pushed the digits above centre. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--button-bg);
+  opacity: 0.85;
+}
+
+/* Zero gap, like `.gameShortcutBar` on the switcher tab: the tile grid and the
+   dropdown button read as one bordered control, so any gap between them shows up
+   as a split down the middle of it. Spacing comes off the items that want it. */
+.steamGamesBar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  height: 100%;
+  min-width: 0;
+}
+
+/* The tickbox itself is the app-wide `.form-check` treatment (Settings.scss draws it
+   on the empty label next to the input); this only fits the text to the action bar. */
+.steamGamesBar__launch {
+  flex: 0 0 auto;
+  margin-right: 0.5rem;
+  white-space: nowrap;
+  font-size: 0.88rem;
+  font-weight: 600;
+
+  label {
+    margin: 0;
+    cursor: pointer;
+  }
+}
+
+/* Stands in for the tiles when there is nothing to switch to, so the empty strip
+   reads as a state rather than a missing control. */
+.steamGamesBar__hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  opacity: 0.75;
+}
+
+/* `.shortcuts` drops its right border because the dropdown button that always
+   follows it on the switcher tab closes that edge. Here the button only exists
+   when accounts overflow, so without it the grid has to draw the edge itself. */
+.shortcuts.steamGamesBar__tiles--noDropdown {
+  border-right: 1px solid var(--button-bg);
+}
+
+.steamGamesBar__more {
+  min-width: 36px;
+  min-height: 36px;
+  max-width: 36px;
+  max-height: 36px;
+  margin: 0 0.25em 0 0;
+
+  svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
+    transition: transform 150ms ease-out;
+  }
+
+  &.flip {
+    border-color: var(--shortcut-active-border, var(--accent)) !important;
+
+    svg {
+      transform: rotate(180deg);
+    }
+  }
+}
+
+.steamGamesBar__dropdown.open {
+  display: flex;
+  flex-direction: column;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  /* `translate`, not `transform`: the open/close transition animates `transform`
+     and would otherwise drop the panel half its width to the right. */
+  translate: -50% 0;
+  transform-origin: bottom center;
+  min-width: 168px;
+}

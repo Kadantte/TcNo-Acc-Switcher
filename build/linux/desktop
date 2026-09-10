@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Name=TcNo Account Switcher
+Comment=A Superfast open-source account switcher
+# A bare name, not a path: the packages put the binary on PATH, and linuxdeploy
+# matches this against the binary bundled in the AppImage, where no /usr/local
+# exists. Both need it to equal the deployed binary's name.
+Exec=tcno-acc-switcher %u
+Terminal=false
+Type=Application
+Icon=tcno-acc-switcher
+Categories=Utility;
+Keywords=steam;account;switcher;
+# Wayland compositors match a window to this file by its app_id, and Wails takes
+# that from the GtkApplication id it builds as "org.wails." plus the lowercased
+# app name - g_set_prgname loses to it, so LinuxOptions.ProgramName cannot
+# change it. Anything else here shows the compositor's fallback icon instead.
+# TestDesktopEntryMatchesWaylandAppID derives this from the name in gui.go.
+StartupWMClass=org.wails.tcno_account_switcher

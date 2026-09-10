@@ -1,0 +1,439 @@
+package steam
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"TcNo-Acc-Switcher/internal/fsutil"
+	"TcNo-Acc-Switcher/internal/profileimage"
+
+	"golang.org/x/net/html"
+)
+
+func FetchMiniprofile(ctx context.Context, client *http.Client, steamID64 string, maxAgeDays int) (frameImgURL string, sanitizedHTML string, err error) {
+	steamID64 = strings.TrimSpace(steamID64)
+	if steamID64 == "" {
+		return "", "", fmt.Errorf("empty steam id")
+	}
+	formats, ferr := FormatsFromID64(steamID64)
+	if ferr != nil {
+		return "", "", fmt.Errorf("steam id: %w", ferr)
+	}
+	id32 := strings.TrimSpace(formats.ID32)
+	if id32 == "" {
+		return "", "", fmt.Errorf("could not derive steam id32")
+	}
+
+	cachePath, err := miniprofileCachePath(steamID64)
+	if err != nil {
+		return "", "", err
+	}
+
+	var page string
+	fromDisk := false
+	if st, statErr := os.Stat(cachePath); statErr == nil && !st.IsDir() && !profileimage.FileOlderThanDays(cachePath, maxAgeDays) {
+		data, rerr := os.ReadFile(cachePath)
+		if rerr == nil && len(data) > 0 {
+			page = sanitizeMiniprofileHTML(string(data))
+			if strings.TrimSpace(page) != "" && miniprofileCachedAssetsLocal(page) {
+				fromDisk = true
+			}
+		}
+	}
+	url := fmt.Sprintf("https://steamcommunity.com/miniprofile/%s", id32)
+	if !fromDisk {
+		// Only the cache miss is metered. A fragment served from disk costs Steam
+		// nothing and must not spend from a budget of fifteen a minute.
+		if lerr := miniprofileLimiter.acquire(ctx); lerr != nil {
+			return "", "", lerr
+		}
+		req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if rerr != nil {
+			return "", "", rerr
+		}
+		req.Header.Set("User-Agent", "TcNo Account Switcher")
+		resp, derr := client.Do(req)
+		if derr != nil {
+			return "", "", derr
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if isMiniprofileRefusal(resp.StatusCode) {
+				// Every account behind this one is about to ask the same question
+				// and get the same answer, so the endpoint stands down as a whole
+				// rather than each of them finding out for itself.
+				miniprofileLimiter.penalise(miniprofilePenalty)
+				steamLog().Warn("miniprofile endpoint refused; standing down",
+					slog.String("steamId", tailSteamID(steamID64)),
+					slog.Int("status", resp.StatusCode),
+					slog.Duration("for", miniprofilePenalty))
+			}
+			return "", "", fmt.Errorf("miniprofile HTTP %d", resp.StatusCode)
+		}
+		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		if rerr != nil {
+			return "", "", rerr
+		}
+		page = string(body)
+		container := extractMiniprofileContainerHTML(page)
+		sanitizedHTML = sanitizeMiniprofileHTML(container)
+		if strings.TrimSpace(container) != "" && strings.TrimSpace(sanitizedHTML) == "" {
+			steamLog().Warn("miniprofile sanitize produced empty output",
+				slog.String("steamId", tailSteamID(steamID64)))
+		}
+		if strings.TrimSpace(sanitizedHTML) != "" {
+			rewritten, embErr := embedMiniprofileHTMLAssets(ctx, client, steamID64, sanitizedHTML, maxAgeDays)
+			if embErr != nil {
+				steamLog().Warn("miniprofile asset embed failed",
+					slog.String("steamId", tailSteamID(steamID64)),
+					slog.Any("err", embErr))
+			} else if strings.TrimSpace(rewritten) != "" {
+				sanitizedHTML = rewritten
+			}
+			_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
+			_ = fsutil.WriteFileAtomic(cachePath, []byte(sanitizedHTML), 0o644)
+		}
+		page = sanitizedHTML
+	} else {
+		sanitizedHTML = page
+	}
+
+	doc, err := html.Parse(strings.NewReader(page))
+	if err != nil {
+		return "", strings.TrimSpace(sanitizedHTML), nil
+	}
+	frameImgURL = extractAvatarFrameImgURLFromDoc(doc)
+	return frameImgURL, strings.TrimSpace(sanitizedHTML), nil
+}
+
+func inferVideoMIME(publicPath, hint string) string {
+	h := strings.TrimSpace(strings.ToLower(hint))
+	if strings.Contains(h, "webm") {
+		return "video/webm"
+	}
+	if strings.Contains(h, "mp4") {
+		return "video/mp4"
+	}
+	lp := strings.ToLower(publicPath)
+	if strings.HasSuffix(lp, ".webm") {
+		return "video/webm"
+	}
+	if strings.HasSuffix(lp, ".mp4") {
+		return "video/mp4"
+	}
+	return "video/webm"
+}
+
+func embedMiniprofileHTMLAssets(ctx context.Context, client *http.Client, steamID64, fragment string, maxAgeDays int) (string, error) {
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" {
+		return "", nil
+	}
+	body, err := parseFragmentInBody(fragment)
+	if err != nil {
+		return "", err
+	}
+
+	var nameplate *html.Node
+	var findNameplate func(*html.Node)
+	findNameplate = func(n *html.Node) {
+		if nameplate != nil {
+			return
+		}
+		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "video") && classAttr(n, "miniprofile_nameplate") {
+			nameplate = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			findNameplate(c)
+		}
+	}
+	findNameplate(body)
+
+	if nameplate != nil {
+		srcURL, mimeHint := pickNameplateSource(nameplate)
+		if srcURL != "" {
+			res, derr := profileimage.DownloadIfNeeded(ctx, client, PlatformKey, steamID64+"_nameplate", srcURL, maxAgeDays)
+			if derr == nil && res != nil {
+				mt := inferVideoMIME(res.PublicURL, mimeHint)
+				htmlRemoveAllChildren(nameplate)
+				htmlAppendChild(nameplate, &html.Node{
+					Type: html.ElementNode,
+					Data: "source",
+					Attr: []html.Attribute{
+						{Key: "src", Val: res.PublicURL},
+						{Key: "type", Val: mt},
+					},
+				})
+			}
+		}
+	}
+
+	if feat := findFirstFeaturedImg(body); feat != nil {
+		u := attrVal(feat, "src")
+		if u != "" {
+			res, derr := profileimage.DownloadIfNeeded(ctx, client, PlatformKey, steamID64+"_featuredbadge", u, maxAgeDays)
+			if derr == nil && res != nil {
+				setAttr(feat, "src", res.PublicURL)
+				removeAttr(feat, "srcset")
+			}
+		}
+	}
+
+	// The webview's CSP refuses the Steam URLs for the frame and avatar images.
+	// The frame shares the accounts list's cache key, so it is usually a
+	// disk hit rather than a download.
+	if frame := findFirstDivWithClass(body, "playersection_avatar_frame"); frame != nil {
+		if img := firstDescendantElement(frame, "img"); img != nil {
+			if u := attrVal(img, "src"); strings.HasPrefix(strings.ToLower(u), "https://") && isSafeSteamAssetURL(u) {
+				res, derr := profileimage.DownloadIfNeeded(ctx, client, PlatformKey, steamID64+"_frame", u, maxAgeDays)
+				if derr == nil && res != nil {
+					setAttr(img, "src", res.PublicURL)
+					removeAttr(img, "srcset")
+				}
+			}
+		}
+	}
+	if mount := findMiniprofileAvatarMountPoint(body); mount != nil {
+		if img := firstDescendantElement(mount, "img"); img != nil {
+			if u := attrVal(img, "src"); strings.HasPrefix(strings.ToLower(u), "https://") && isSafeSteamAssetURL(u) {
+				// The switcher's own caches win when present — the full-quality
+				// static first, then the plain key if it holds an image (it can
+				// hold an animation, which an img cannot play). A distinct key
+				// otherwise, so the miniprofile's medium-size copy can never
+				// displace the full-size avatar the accounts list downloads.
+				local, ok := profileimage.FindCached(PlatformKey, steamStaticAvatarID(steamID64))
+				if !ok {
+					if u2, ok2 := profileimage.FindCached(PlatformKey, steamID64); ok2 && !isAnimatedProfilePublicURL(u2) {
+						local, ok = u2, true
+					}
+				}
+				if !ok {
+					if res, derr := profileimage.DownloadIfNeeded(ctx, client, PlatformKey, steamID64+"_mini", u, maxAgeDays); derr == nil && res != nil {
+						local, ok = res.PublicURL, true
+					}
+				}
+				if ok {
+					setAttr(img, "src", local)
+					removeAttr(img, "srcset")
+				}
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	for c := body.FirstChild; c != nil; c = c.NextSibling {
+		if err := html.Render(&buf, c); err != nil {
+			return "", err
+		}
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+// miniprofileCachedAssetsLocal reports whether a cached fragment's frame and
+// avatar images already point at the app's own origin. Caches written before
+// those were localized still carry Steam URLs the webview's CSP refuses;
+// treating them as stale refetches and heals them.
+func miniprofileCachedAssetsLocal(fragment string) bool {
+	body, err := parseFragmentInBody(fragment)
+	if err != nil || body == nil {
+		return false
+	}
+	remote := func(img *html.Node) bool {
+		return img != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(attrVal(img, "src"))), "https://")
+	}
+	if frame := findFirstDivWithClass(body, "playersection_avatar_frame"); frame != nil {
+		if remote(firstDescendantElement(frame, "img")) {
+			return false
+		}
+	}
+	if mount := findMiniprofileAvatarMountPoint(body); mount != nil {
+		if remote(firstDescendantElement(mount, "img")) {
+			return false
+		}
+	}
+	// Every locally-served asset must still exist: clearing the profiles
+	// folder leaves cached HTML pointing at deleted files, and only a refetch
+	// downloads them again.
+	usable := true
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if !usable {
+			return
+		}
+		if n.Type == html.ElementNode {
+			switch strings.ToLower(n.Data) {
+			case "img", "video", "source":
+				if u := strings.TrimSpace(attrVal(n, "src")); strings.HasPrefix(u, "/img/") && !profileimage.LocalAssetExists(u) {
+					usable = false
+					return
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(body)
+	return usable
+}
+
+func ExtractMiniprofileDisplayName(fragment string) string {
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" {
+		return ""
+	}
+	body, err := parseFragmentInBody(fragment)
+	if err != nil || body == nil {
+		return ""
+	}
+	var walk func(*html.Node) string
+	walk = func(n *html.Node) string {
+		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "span") && classAttrPrefix(n, "persona") {
+			if t := strings.TrimSpace(elementTextContent(n)); t != "" {
+				return t
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if hit := walk(c); hit != "" {
+				return hit
+			}
+		}
+		return ""
+	}
+	return walk(body)
+}
+
+func ExtractMiniprofileAvatarMediaURL(fragment string) string {
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" {
+		return ""
+	}
+	body, err := parseFragmentInBody(fragment)
+	if err != nil || body == nil {
+		return ""
+	}
+	mount := findMiniprofileAvatarMountPoint(body)
+	if mount == nil {
+		return ""
+	}
+	// Every branch reports a URL the caller will download, so a local path left by
+	// a previously localized fragment must not qualify — it would be handed to the
+	// HTTP client as if it were remote.
+	if v := firstDescendantElement(mount, "video"); v != nil {
+		if u, _ := pickNameplateSource(v); isRemoteSteamAssetURL(u) {
+			return u
+		}
+		if u := attrVal(v, "src"); isRemoteSteamAssetURL(u) {
+			return u
+		}
+	}
+	// The img fallback exists for animated GIF avatars only. A still avatar's
+	// img is a smaller copy of what the full-quality static download already
+	// fetches, so reporting it here would download twice and show the worse copy.
+	if img := firstDescendantElement(mount, "img"); img != nil {
+		if u := attrVal(img, "src"); isRemoteSteamAssetURL(u) && strings.HasSuffix(strings.ToLower(u), ".gif") {
+			return u
+		}
+	}
+	return ""
+}
+
+func ReplaceMiniprofileMainAvatar(fragment, publicAvatarURL string) string {
+	publicAvatarURL = strings.TrimSpace(publicAvatarURL)
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" || publicAvatarURL == "" {
+		return fragment
+	}
+	if !isSafeSteamAssetURL(publicAvatarURL) {
+		return fragment
+	}
+
+	body, err := parseFragmentInBody(fragment)
+	if err != nil || body == nil {
+		return fragment
+	}
+
+	mount := findMiniprofileAvatarMountPoint(body)
+	if mount == nil {
+		return fragment
+	}
+
+	htmlRemoveAllChildren(mount)
+	htmlAppendChild(mount, &html.Node{
+		Type: html.ElementNode,
+		Data: "img",
+		Attr: []html.Attribute{
+			{Key: "class", Val: "avatar"},
+			{Key: "src", Val: publicAvatarURL},
+			{Key: "alt", Val: ""},
+		},
+	})
+
+	var buf bytes.Buffer
+	for c := body.FirstChild; c != nil; c = c.NextSibling {
+		if err := html.Render(&buf, c); err != nil {
+			return fragment
+		}
+	}
+	return sanitizeMiniprofileHTML(strings.TrimSpace(buf.String()))
+}
+
+func miniprofileAvatarURLWithModTimeBust(publicURL, steamID64 string) string {
+	publicURL = strings.TrimSpace(publicURL)
+	steamID64 = strings.TrimSpace(steamID64)
+	if publicURL == "" || steamID64 == "" {
+		return publicURL
+	}
+	p, ok := profileimage.CachedFilePath(PlatformKey, steamID64)
+	if !ok {
+		return publicURL
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return publicURL
+	}
+	ms := st.ModTime().UnixMilli()
+	if ms <= 0 {
+		return publicURL
+	}
+	sep := "?"
+	if strings.Contains(publicURL, "?") {
+		sep = "&"
+	}
+	return publicURL + sep + "_tcv=" + strconv.FormatInt(ms, 10)
+}
+
+func ApplySteamManualAvatarMiniprofile(fragment, steamID64 string) string {
+	steamID64 = strings.TrimSpace(steamID64)
+	if steamID64 == "" || strings.TrimSpace(fragment) == "" {
+		return fragment
+	}
+	if !profileimage.HasManualProfileMarker(PlatformKey, steamID64) {
+		return fragment
+	}
+	u, ok := profileimage.FindCached(PlatformKey, steamID64)
+	if !ok {
+		return fragment
+	}
+	return applyManualAvatarToMiniprofile(fragment, steamID64, u)
+}
+
+// applyManualAvatarToMiniprofile swaps in a manual avatar the caller has already
+// resolved; an empty cachedURL means there is nothing to swap in. List builders
+// pass a URL from their own directory snapshot, so keep this separate from
+// ApplySteamManualAvatarMiniprofile, which costs two filesystem lookups per account.
+func applyManualAvatarToMiniprofile(fragment, steamID64, cachedURL string) string {
+	if strings.TrimSpace(fragment) == "" || steamID64 == "" || cachedURL == "" {
+		return fragment
+	}
+	return ReplaceMiniprofileMainAvatar(fragment, miniprofileAvatarURLWithModTimeBust(cachedURL, steamID64))
+}

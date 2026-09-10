@@ -1,0 +1,70 @@
+# nfpm configuration. See https://nfpm.goreleaser.com
+#
+# Nothing here may carry a .exe suffix: the names below are the ones the desktop
+# entry points at, so a mismatch means the menu launches nothing and the icon
+# lookup fails, which leaves the compositor drawing its own placeholder.
+
+name: "tcno-acc-switcher"
+arch: ${GOARCH}
+platform: "linux"
+version: "0.1.0"
+section: "utils"
+priority: "optional"
+maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+description: "A Superfast open-source account switcher"
+vendor: "TcNo"
+homepage: "https://github.com/TCNOco/TcNo-Acc-Switcher"
+license: "GPL-3.0-only"
+release: "1"
+
+contents:
+  # The build task names the binary after APP_NAME in the root Taskfile; it is
+  # installed under the lowercase name the desktop entry's Exec resolves.
+  - src: "./bin/TcNo-Acc-Switcher"
+    dst: "/usr/local/bin/tcno-acc-switcher"
+
+  - src: "./build/linux/desktop"
+    dst: "/usr/share/applications/tcno-acc-switcher.desktop"
+
+  # Icon= in the desktop entry is a theme name, so the icon has to be installed
+  # into hicolor at a size the theme declares. A single oversized PNG dropped in
+  # one size directory is not found reliably.
+  - src: "./build/linux/icons/16x16/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/16x16/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/24x24/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/24x24/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/32x32/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/32x32/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/48x48/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/48x48/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/64x64/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/64x64/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/128x128/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/128x128/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/256x256/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/256x256/apps/tcno-acc-switcher.png"
+  - src: "./build/linux/icons/512x512/apps/tcno-acc-switcher.png"
+    dst: "/usr/share/icons/hicolor/512x512/apps/tcno-acc-switcher.png"
+
+# Wails v3 links GTK4 and WebKitGTK 6.0, not the GTK3/WebKit2 4.1 pair the
+# scaffolding declared. Read back off the linked binary with ldd.
+depends:
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+  - libsoup-3.0-0
+
+overrides:
+  rpm:
+    depends:
+      - gtk4
+      - webkitgtk6.0
+      - libsoup3
+  archlinux:
+    depends:
+      - gtk4
+      - webkitgtk-6.0
+      - libsoup3
+
+scripts:
+  postinstall: "./build/linux/nfpm/scripts/postinstall.sh"
+  postremove: "./build/linux/nfpm/scripts/postremove.sh"

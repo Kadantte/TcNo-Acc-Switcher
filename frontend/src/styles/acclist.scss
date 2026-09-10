@@ -1,0 +1,562 @@
+﻿.steam-acclist {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+// A plain stylesheet, not a Svelte <style> block, so `:global(...)` is not a
+// selector the browser understands. The grid fills the column left over after
+// the tag filter bar and scrolls inside it.
+.steam-acclist .acc_list.reorder-pointer-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+}
+
+.steam-acclist .steam_meta_badge.dim {
+  opacity: 0.55;
+}
+
+.steam-acclist .steam_meta_err {
+  font-size: 0.6em;
+  color: var(--red);
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.steam-acclist .steam_meta_pending {
+  font-size: 0.6em;
+  opacity: 0.65;
+}
+
+.steam-acclist .acc_lastused {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+
+// Matches .acc_lastused deliberately: the colour comes from label.acc p, but the
+// size and opacity are what actually make the two lines look like siblings.
+// white-space is normal so "Permanent cooldown" wraps rather than clipping — the
+// abbreviated durations fit one line at this width on their own.
+.steam-acclist .acc_cooldown {
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.15;
+  white-space: normal;
+  opacity: 0.75;
+}
+
+.steam-acclist label.acc p.steamId {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7em;
+}
+
+// Streamer mode. The identifier leaves the layout entirely rather than being
+// blurred or blanked out: a blur is still a picture of the thing being hidden, and
+// a placeholder row tells a chat exactly how many characters to guess at.
+:root.streamer-mode .streamerCensor {
+  display: none;
+}
+
+.acc_list_actionbar,
+#acc_list,
+.headerbar,
+#window-title-modal {
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.acc_list {
+  gap: 4px;
+  display: grid;
+  position: relative;
+  grid-template-columns: repeat(auto-fill, 100px);
+  // Tiles keep their fixed width; the width left over once auto-fill has packed
+  // the row is spread between them instead of collecting as dead space on the
+  // right. gap stays the floor, so tiles never touch.
+  justify-content: space-between;
+  grid-auto-rows: minmax(min-content, max-content);
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
+// Rows are only as even as the tile inside them. The grid already sizes each
+// row to its tallest account, and the cell stretches to that - but the tile the
+// eye actually sees is `label.acc`, two levels down, and a percentage height
+// against an auto-height wrapper collapses to the content. So the cell and the
+// wrapper hand their height down by stretching. Nothing to recompute on drop,
+// insert or resize: the row track is the source of truth.
+.acc_list_item {
+  border: 0.1em solid transparent;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  min-width: 0;
+
+  .input-modality-keyboard &:focus,
+  .input-modality-controller &:focus {
+    outline: 2px solid transparent;
+    outline-offset: 3px;
+  }
+
+  .input-modality-controller &:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  .input-modality-keyboard &:focus label.acc,
+  .input-modality-controller &:focus label.acc {
+    --custom-focus-ring-color: var(--focus-ring-color, var(--whiteSecondary, var(--accent)));
+    --custom-focus-ring-offset-color: var(--focus-ring-offset-color, var(--mainContentBackground, var(--code-background, #111)));
+    border-color: var(--custom-focus-ring-color) !important;
+    box-shadow:
+      0 0 0 2px var(--custom-focus-ring-offset-color),
+      0 0 0 5px var(--custom-focus-ring-color) !important;
+  }
+
+  .acc_note {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .acc_stat {
+    font-size: 0.8em;
+
+    sup {
+      margin-right: 0.4em;
+    }
+
+    img {
+      width: auto;
+      height: auto;
+    }
+  }
+}
+
+.acc_list_item--ghost,
+.placeHolderAcc {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.acc_list_item--ghost {
+  animation: none !important;
+  opacity: 1;
+}
+
+.acc_list_item_inner {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.placeHolderAcc {
+  width: 100px;
+  min-height: 135px;
+  border: 2px dashed var(--accent-border-strong);
+  background: var(--code-background);
+}
+
+.acc_list--skeleton {
+  pointer-events: none;
+}
+
+.acc_list_item--skeleton {
+  width: 100px;
+  min-height: 135px;
+  padding: 0.35rem 0.25rem 0.5rem;
+  border: 0.1em solid var(--accent-border-strong);
+  background: var(--code-background);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: default;
+  box-sizing: border-box;
+}
+
+.acc_skeleton_avatar,
+.acc_skeleton_line {
+  background: linear-gradient(
+    90deg,
+    var(--black-alpha-12, rgba(0, 0, 0, 0.12)) 0%,
+    var(--accent-border-strong, rgba(255, 255, 255, 0.18)) 50%,
+    var(--black-alpha-12, rgba(0, 0, 0, 0.12)) 100%
+  );
+  background-size: 200% 100%;
+  animation: accSkeletonShimmer 1.2s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.acc_skeleton_avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 4px;
+}
+
+.acc_skeleton_lines {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.acc_skeleton_line {
+  height: 0.65rem;
+}
+
+.acc_skeleton_line--name {
+  width: 72%;
+}
+
+@keyframes accSkeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.placeHolderPlat {
+  border: 2px dashed var(--accent-border-strong);
+  background: var(--code-background);
+  width: 20vw;
+  height: 20vw;
+  max-width: 175px;
+  max-height: 175px;
+  display: inline-block;
+  margin: 10px;
+  vertical-align: middle;
+}
+
+.accountHover > label.acc {
+  border: 0.1em solid var(--accent-border-strong);
+  /* Seperate because added by sortable */
+  background: var(--code-background);
+}
+
+input.acc {
+  -moz-appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.input-modality-keyboard input.acc:focus + label.acc,
+.input-modality-controller input.acc:focus + label.acc {
+  --custom-focus-ring-color: var(--focus-ring-color, var(--whiteSecondary, var(--accent)));
+  --custom-focus-ring-offset-color: var(--focus-ring-offset-color, var(--mainContentBackground, var(--code-background, #111)));
+  border-color: var(--custom-focus-ring-color) !important;
+  box-shadow:
+    0 0 0 2px var(--custom-focus-ring-offset-color),
+    0 0 0 5px var(--custom-focus-ring-color) !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+label.acc {
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  min-width: 100px;
+  max-width: 100px;
+  min-height: 135px;
+  // Stretched by .acc_list_item_inner to the row's height; a percentage here
+  // would resolve against a wrapper that has none.
+  height: auto;
+  margin: -0.1em;
+  padding: 0.5em;
+  border-width: 0.1em;
+  border-style: solid;
+  border-color: transparent;
+  color: var(--whiteSecondary);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+  line-height: 1em;
+
+  /* Lift and shadow only: border and fill are what mark the selected account
+     and the live one, and this hover rule outranks both - repaint either here
+     and pointing at a tile would erase the state it is in. */
+  &:hover:not(.acc--broken) {
+    box-shadow: 0 4px 14px var(--shadow-color-35);
+    transform: translateY(-2px);
+  }
+
+  &:active:not(.acc--broken) {
+    transform: translateY(0) scale(0.985);
+    box-shadow: none;
+  }
+
+  &.acc--broken {
+    cursor: not-allowed;
+    opacity: 0.72;
+  }
+
+  > img {
+    -webkit-user-drag: none;
+    display: inline-block;
+    width: 6em;
+    height: 6em;
+    margin-bottom: 0.5em;
+    border: 2px solid transparent;
+  }
+
+  .steam-acc-avatar-wrap {
+    position: relative;
+    display: inline-block;
+    width: 6em;
+    height: 6em;
+    margin-bottom: 0.75em;
+    vertical-align: top;
+  }
+
+  img.steam-acc-avatar,
+  video.steam-acc-avatar {
+    -webkit-user-drag: none;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    border: 2px solid transparent;
+    object-fit: cover;
+  }
+
+  .steam-acc-avatar-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    margin: 0;
+    border: none !important;
+    box-sizing: border-box;
+    transform: scale(1.22);
+  }
+
+  // Bottom-right corner of the avatar, above the frame's z-order so a framed
+  // avatar cannot cover it. Bare glyph, no plate: the drop shadow is what keeps
+  // it legible over a light or busy profile picture.
+  .steam-acc-avatar-guard {
+    position: absolute;
+    right: 0.35em;
+    bottom: 0.35em;
+    z-index: 2;
+    display: block;
+    width: 1.1em;
+    height: 1.1em;
+    pointer-events: none;
+
+    svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      fill: var(--role-success, #4caf50);
+      filter: drop-shadow(0 0 0.12em rgba(0, 0, 0, 0.9));
+    }
+  }
+
+  // An unfinished setup is not protection, and neither is a record holding only
+  // a session: same glyph, deliberately not the colour that means "done".
+  .steam-acc-avatar-guard--pending svg,
+  .steam-acc-avatar-guard--login-only svg {
+    fill: var(--role-warning, #c9992a);
+  }
+
+  h6 {
+    max-width: 9em;
+    margin: 0;
+    overflow: hidden;
+    font-size: 1em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p {
+    max-width: 9em;
+    margin: 0 auto;
+    overflow: hidden;
+    color: var(--text-muted-gray);
+    font-size: 0.75em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .acc_broken_badge {
+    display: block;
+    max-width: 9em;
+    margin: 0 auto 0.35rem;
+    overflow: hidden;
+    color: var(--red);
+    font-size: 0.72em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// Ban state rides on the account name: Steam's avatar frame owns the pixels a
+// ring around the avatar would need. The `label.acc` half of each selector
+// outranks themes that repaint headings inside an account tile.
+label.acc .acc_name--vac,
+.acc_name--vac {
+  color: var(--red);
+}
+
+label.acc .acc_name--limited,
+.acc_name--limited {
+  color: var(--yellow);
+}
+
+input.acc:checked + label.acc.currentAcc {
+  border-color: var(--shortcut-active-border, var(--green));
+  border-style: solid;
+}
+
+input.acc:checked + label.acc {
+  border-color: var(--shortcut-active-border, var(--accent));
+  background: var(--button-bg);
+}
+
+label.acc.currentAcc {
+  border-color: var(--shortcut-active-border, var(--green));
+  border-style: dashed;
+}
+
+.acc_list_actionbar {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 3.5em;
+  padding: 0.25em 0.25em;
+  overflow: hidden;
+  background: var(--surface-row-dark);
+  color: var(--whiteSecondary);
+  input {
+    user-select: none;
+    width: inherit;
+    padding-left: 1em;
+    border: none;
+    outline: none;
+    background: none;
+    color: var(--text-muted-gray);
+    line-height: 3em;
+  }
+
+  input::selection {
+    user-select: none;
+    background: none;
+    color: var(--text-muted-gray);
+  }
+
+  > div {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    width: 100%;
+    height: 3em;
+  }
+}
+
+.acc_list_actionbar div .btn_login,
+.btn_close span {
+  padding: 0.25em 5em;
+}
+
+.statusBar {
+  position: relative;
+
+  div,
+  input {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+  }
+
+  input {
+    z-index: 1;
+  }
+
+  div {
+    z-index: 5;
+  }
+}
+
+label h6 svg {
+  fill: var(--whiteSecondary);
+  margin: 2px;
+}
+
+.battleNetIcon {
+  display: inline-block;
+  width: 15px;
+}
+
+.steam-miniprofile-popover {
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, calc(100vh - 24px));
+  overflow: auto;
+  border-radius: 4px;
+  box-shadow: 0 8px 28px var(--shadow-color-45);
+  background: var(--surface-steam-popover);
+  color: var(--whiteSecondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.steam-miniprofile-popover__inner {
+  padding: 0;
+}
+
+.steam-miniprofile-popover__inner .miniprofile_container {
+  transform-origin: top left;
+  max-width: 100%;
+}
+
+.steam-miniprofile-popover__inner img,
+.steam-miniprofile-popover__inner video {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}

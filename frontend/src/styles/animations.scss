@@ -1,0 +1,110 @@
+@use "sass:list";
+@use "sass:string";
+
+/* One scale of speeds and one curve for the whole UI; `--ease-out` is the
+   cubicOut the Svelte transitions in lib/animation.ts use. Reach for these
+   rather than an inline duration, so both kinds of motion stay in step. */
+:root {
+  --dur-instant: 90ms;
+  --dur-fast: 120ms;
+  --dur-normal: 200ms;
+  --dur-slow: 300ms;
+  --ease-out: cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+@mixin reduce-motion {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Motion that reports rather than decorates: busy spinners, indeterminate bars,
+   the Steam Guard countdown. Freezing these strands a spinner mid-turn and takes
+   away the only reading of how long an auth code has left. Mark anything new
+   with `.motion-essential`; the entries below are pseudo-elements or classes
+   with no single element worth marking. Each covers the element and its
+   subtree. */
+$motion-essential:
+  ".motion-essential",
+  ".gamestats-spinner",
+  ".steam-guard__spinner",
+  ".steam-guard__qr-progress",
+  ".steam-guard__countdown",
+  ".security-progress-spinner",
+  ".userDataMoveOverlay__spinner",
+  ".userDataMoveOverlay__barFill--indeterminate",
+  ".serverpicker-spinner",
+  ".serverpicker-refresh.is-busy",
+  ".confirmations-spinner",
+  ".confirmations-refresh[aria-busy='true']",
+  ".actionbar[data-busy='true']";
+
+/* Exclusion rather than an override: the rules below are `!important` on a
+   universal selector, so nothing downstream could win one back. */
+@function motion-exempt() {
+  $self: ();
+  $inside: ();
+  @each $selector in $motion-essential {
+    $self: list.append($self, string.unquote($selector), comma);
+    $inside: list.append($inside, string.unquote("#{$selector} *"), comma);
+  }
+  @return string.unquote(":not(#{$self}):not(#{$inside})");
+}
+
+@mixin reduce-motion-tree {
+  &#{motion-exempt()},
+  & *#{motion-exempt()},
+  & *#{motion-exempt()}::before,
+  & *#{motion-exempt()}::after {
+    @include reduce-motion;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    @include reduce-motion-tree;
+  }
+}
+
+/* Programmatic motion disable via app setting */
+:root.animations-disabled,
+body.animations-disabled,
+.animations-disabled {
+  @include reduce-motion-tree;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.anim-fade-in {
+  animation: fadeIn 0.2s ease-out both;
+}
+
+.anim-scale-in {
+  animation: scaleIn 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+
+.anim-slide-up {
+  animation: slideUp 0.2s ease-out both;
+}
+
+.anim-slide-down {
+  animation: slideDown 0.18s ease-out both;
+}
